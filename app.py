@@ -4,7 +4,15 @@ from ultralytics import YOLO
 import os
 import time
 
-
+import sys
+try:
+    import lap
+except ImportError:
+    import sys
+    import subprocess
+    # Ce hack permet de faire croire à Ultralytics que lapx est lap
+    import lapx as lap
+    sys.modules['lap'] = lap
 # ======================================
 # CONFIGURATION
 # ======================================
