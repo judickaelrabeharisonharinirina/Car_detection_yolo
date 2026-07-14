@@ -1,73 +1,55 @@
 import cv2
 import streamlit as st
+import requests
 from ultralytics import YOLO
-import os
 import time
 
-import sys
-try:
-    import lap
-except ImportError:
-    import sys
-    import subprocess
-    # Ce hack permet de faire croire à Ultralytics que lapx est lap
-    import lapx as lap
-    sys.modules['lap'] = lap
-# ======================================
-# CONFIGURATION
-# ======================================
-
+# ==============================
+# CONFIGURATION STREAMLIT
+# ==============================
 st.set_page_config(
     page_title="YOLOv8 Vehicle Tracking",
     layout="wide"
 )
 
-st.title("🚗 YOLOv8 Vehicle Detection + Tracking")
-st.subheader("YOLOv8 + ByteTrack + Phone Camera")
+st.title("🚗 Détection & Tracking de Véhicules en Temps Réel")
+st.subheader("YOLOv8 + ByteTrack + IP Webcam")
 
-
-# ======================================
-# YOLO MODEL
-# ======================================
-
+# ==============================
+# CHARGEMENT MODELE
+# ==============================
 @st.cache_resource
 def load_model():
-
     return YOLO("yolov8n.pt")
 
 
 model = load_model()
 
 
-
-# ======================================
-# SESSION
-# ======================================
-
+# ==============================
+# SESSION STATE
+# ==============================
 if "running" not in st.session_state:
-
     st.session_state.running = False
 
 
-
-# ======================================
+# ==============================
 # SIDEBAR
-# ======================================
-
-st.sidebar.header("⚙️ Configuration")
+# ==============================
+st.sidebar.header("🛠 Configuration")
 
 
 source_type = st.sidebar.radio(
     "Source vidéo",
     [
         "Webcam PC",
-        "Caméra téléphone",
-        "Vidéo locale"
+        "Caméra téléphone IP Webcam",
+        "Vidéo"
     ]
 )
 
 
-confidence = st.sidebar.slider(
+conf_threshold = st.sidebar.slider(
     "Confidence",
     0.1,
     1.0,
@@ -76,181 +58,144 @@ confidence = st.sidebar.slider(
 )
 
 
-
 video_source = None
 
 
-
-# ======================================
+# ==============================
 # WEBCAM PC
-# ======================================
-
+# ==============================
 if source_type == "Webcam PC":
 
     video_source = 0
 
 
+# ==============================
+# IP WEBCAM TELEPHONE
+# ==============================
+elif source_type == "Caméra téléphone IP Webcam":
 
-# ======================================
-# TELEPHONE
-# ======================================
-
-elif source_type == "Caméra téléphone":
-
-
-    ip = st.sidebar.text_input(
-        "IP téléphone",
+    phone_ip = st.sidebar.text_input(
+        "Adresse IP téléphone",
         value="192.168.88.14"
     )
 
 
-    port = st.sidebar.text_input(
-        "Port",
-        value="4747"
-    )
-
-
-    endpoint = st.sidebar.selectbox(
-        "Flux",
+    stream_path = st.sidebar.selectbox(
+        "Flux vidéo",
         [
             "/video",
-            "/mjpegfeed?640x480",
-            "/mjpegfeed?1280x720"
+            "/videofeed",
+            "/video.mjpg"
         ]
     )
 
 
     video_source = (
-        f"http://{ip}:{port}{endpoint}"
+        f"http://{phone_ip}:8080{stream_path}"
     )
 
 
     st.sidebar.info(
-        video_source
+        f"Flux :\n{video_source}"
     )
 
 
-
-# ======================================
-# VIDEO
-# ======================================
-
+# ==============================
+# VIDEO UPLOAD
+# ==============================
 else:
 
-
     uploaded = st.sidebar.file_uploader(
-        "Choisir vidéo",
-        type=[
-            "mp4",
-            "avi",
-            "mov"
-        ]
+        "Choisir une vidéo",
+        type=["mp4", "avi", "mov"]
     )
 
 
     if uploaded:
 
+        filename = "temp_video.mp4"
 
-        path = "temp_video.mp4"
+        with open(filename, "wb") as f:
+            f.write(uploaded.read())
 
-
-        with open(path,"wb") as f:
-
-            f.write(
-                uploaded.read()
-            )
-
-
-        video_source = path
+        video_source = filename
 
 
 
-# ======================================
-# BUTTONS
-# ======================================
-
-col1,col2 = st.sidebar.columns(2)
+# ==============================
+# BOUTONS
+# ==============================
+col1, col2 = st.sidebar.columns(2)
 
 
 with col1:
-
-    if st.button("▶ Start"):
-
+    if st.button("▶ Démarrer"):
         st.session_state.running = True
 
 
-
 with col2:
-
     if st.button("⏹ Stop"):
-
         st.session_state.running = False
 
 
 
-# ======================================
-# DISPLAY
-# ======================================
+# ==============================
+# ZONES AFFICHAGE
+# ==============================
+video_area = st.empty()
 
-video_placeholder = st.empty()
+stats_area = st.empty()
 
-stats_placeholder = st.empty()
-
-global_placeholder = st.empty()
-
+counter_area = st.empty()
 
 
-# ======================================
-# START TRACKING
-# ======================================
 
-if (
-    st.session_state.running
-    and video_source is not None
-):
+# ==============================
+# TEST IP WEBCAM
+# ==============================
+def test_camera(url):
 
+    try:
 
-    # -------------------------------
-    # OPEN VIDEO
-    # -------------------------------
-
-
-    if source_type == "Caméra téléphone":
-
-
-        os.environ[
-            "OPENCV_FFMPEG_CAPTURE_OPTIONS"
-        ] = (
-            "fflags;nobuffer|"
-            "flags;low_delay"
+        r = requests.get(
+            url,
+            timeout=3
         )
 
+        return True
 
-        cap = cv2.VideoCapture(
-            video_source,
-            cv2.CAP_FFMPEG
-        )
+    except:
 
-
-        cap.set(
-            cv2.CAP_PROP_BUFFERSIZE,
-            1
-        )
+        return False
 
 
-    else:
+
+# ==============================
+# TRACKING
+# ==============================
+if st.session_state.running and video_source is not None:
 
 
-        cap = cv2.VideoCapture(
-            video_source
-        )
+    if source_type == "Caméra téléphone IP Webcam":
 
+        if not test_camera(video_source):
+
+            st.error(
+                "❌ Impossible de joindre IP Webcam\n"
+                "Vérifie IP + WiFi + serveur IP Webcam"
+            )
+
+            st.stop()
+
+
+
+    cap = cv2.VideoCapture(video_source)
 
 
     if not cap.isOpened():
 
         st.error(
-            "❌ Impossible d'ouvrir le flux vidéo"
+            "❌ Impossible d'ouvrir la caméra"
         )
 
         st.stop()
@@ -260,12 +205,10 @@ if (
     tracked_ids = {}
 
 
-
-    # -------------------------------
-    # LOOP
-    # -------------------------------
-
-    while st.session_state.running:
+    while (
+        cap.isOpened()
+        and st.session_state.running
+    ):
 
 
         ret, frame = cap.read()
@@ -274,45 +217,36 @@ if (
         if not ret:
 
             st.error(
-                "❌ Impossible de lire le flux"
+                "❌ Impossible de lire le flux vidéo"
             )
 
             break
 
 
 
-        # ---------------------------
-        # YOLO TRACK
-        # ---------------------------
+        # ======================
+        # YOLO TRACKING
+        # ======================
 
         results = model.track(
-
             frame,
-
             persist=True,
-
             tracker="bytetrack.yaml",
-
-            conf=confidence,
-
-            device=0,
-
-            verbose=False
+            conf=conf_threshold,
+            device=0
         )
-
 
 
         current_counts = {}
 
-        annotated_frame = frame
+        annotated = frame
 
 
 
         for r in results:
 
 
-            annotated_frame = r.plot()
-
+            annotated = r.plot()
 
 
             if (
@@ -337,58 +271,46 @@ if (
                 )
 
 
-
-                for obj_id, cls in zip(
-                    ids,
-                    classes
-                ):
+                for obj_id, cls in zip(ids, classes):
 
 
                     name = model.names[cls]
 
-
-
-                    # visible
 
                     current_counts[name] = (
                         current_counts.get(name,0)+1
                     )
 
 
-
-                    # global
-
                     if name not in tracked_ids:
 
                         tracked_ids[name] = set()
 
 
-                    tracked_ids[name].add(
-                        obj_id
-                    )
+                    tracked_ids[name].add(obj_id)
 
 
 
-        # ---------------------------
-        # VIDEO DISPLAY
-        # ---------------------------
+        # ======================
+        # AFFICHAGE VIDEO
+        # ======================
 
-        video_placeholder.image(
-            annotated_frame,
+        video_area.image(
+            annotated,
             channels="BGR",
             use_container_width=True
         )
 
 
 
-        # ---------------------------
-        # CURRENT STATS
-        # ---------------------------
+        # ======================
+        # STATS
+        # ======================
 
-        with stats_placeholder.container():
+        with stats_area.container():
 
-            st.subheader(
-                "📊 Objets visibles"
+            st.write(
+                "### 📊 Objets visibles"
             )
 
 
@@ -401,23 +323,22 @@ if (
                         v
                     )
 
-
             else:
 
                 st.write(
-                    "Aucun objet"
+                    "Aucun objet détecté"
                 )
 
 
 
-        # ---------------------------
-        # GLOBAL COUNT
-        # ---------------------------
+        # ======================
+        # COMPTEUR GLOBAL
+        # ======================
 
-        with global_placeholder.container():
+        with counter_area.container():
 
-            st.subheader(
-                "📈 Total unique"
+            st.write(
+                "### 📈 Total unique"
             )
 
 
@@ -429,7 +350,7 @@ if (
 
 
 
-        time.sleep(0.02)
+        time.sleep(0.03)
 
 
 
